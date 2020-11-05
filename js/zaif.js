@@ -23,6 +23,7 @@ module.exports = class zaif extends Exchange {
                 'fetchBalance': true,
                 'fetchClosedOrders': true,
                 'fetchMarkets': true,
+                'fetchOHLCV': true,
                 'fetchOrderBook': true,
                 'fetchOpenOrders': true,
                 'fetchTicker': true,
@@ -32,6 +33,7 @@ module.exports = class zaif extends Exchange {
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766927-39ca2ada-5eeb-11e7-972f-1b4199518ca6.jpg',
                 'api': 'https://api.zaif.jp',
+                'chartapi': 'https://zaif.jp/zaif_chart_api/v1',
                 'www': 'https://zaif.jp',
                 'doc': [
                     'https://techbureau-api-document.readthedocs.io/ja/latest/index.html',
@@ -41,6 +43,16 @@ module.exports = class zaif extends Exchange {
                     'https://github.com/you21979/node-zaif',
                 ],
                 'fees': 'https://zaif.jp/fee?lang=en',
+            },
+            'timeframes': {
+                '1m': '1',
+                '5m': '5',
+                '15m': '15',
+                '30m': '30',
+                '1h': '60',
+                '2h': '240',
+                '4h': '480',
+                '1d': 'D',
             },
             'fees': {
                 'trading': {
@@ -102,6 +114,11 @@ module.exports = class zaif extends Exchange {
                         'ticker/{group_id}/{pair}',
                         'trades/{group_id}/{pair}',
                         'depth/{group_id}/{pair}',
+                    ],
+                },
+                'chartapi': {
+                    'get': [
+                        'history',
                     ],
                 },
             },
@@ -246,6 +263,40 @@ module.exports = class zaif extends Exchange {
             'quoteVolume': quoteVolume,
             'info': ticker,
         };
+    }
+
+    async fetchOHLCV (symbol, timeframe = '1m', since = undefined, limit = undefined, params = {}) {
+        await this.loadMarkets ();
+        const market = this.market (symbol);
+        if (since === undefined) {
+            since = this.milliseconds () - 86400000;
+        }
+        const request = {
+            'symbol': market['id'],
+            'resolution': this.timeframes[timeframe],
+            'from': Math.floor (since / 1000),
+            'to': this.seconds (),
+        };
+        const response = await this.chartapiGetHistory (this.extend (request, params));
+        const json = this.unjson (this.unjson (response)); // TODO
+        const ohlcv_data = this.safeValue (json, 'ohlc_data');
+        const result = this.convertZaifTradingViewToOHLCV (ohlcv_data);
+        return this.parseOHLCVs (result, market, timeframe, since, limit);
+    }
+
+    convertZaifTradingViewToOHLCV (ohlcv_data) {
+        const result = [];
+        for (let i = 0; i < ohlcv_data.length; i++) {
+            result.push ([
+                this.safeInteger (ohlcv_data[i], 'time'),
+                this.safeFloat (ohlcv_data[i], 'open'),
+                this.safeFloat (ohlcv_data[i], 'high'),
+                this.safeFloat (ohlcv_data[i], 'low'),
+                this.safeFloat (ohlcv_data[i], 'close'),
+                this.safeFloat (ohlcv_data[i], 'volume'),
+            ]);
+        }
+        return result;
     }
 
     parseTrade (trade, market = undefined) {
@@ -441,6 +492,14 @@ module.exports = class zaif extends Exchange {
             url += 'api/' + this.version + '/' + this.implodeParams (path, params);
         } else if (api === 'fapi') {
             url += 'fapi/' + this.version + '/' + this.implodeParams (path, params);
+        } else if (api === 'chartapi') {
+            url = this.urls['chartapi'] + '/' + this.implodeParams (path, params);
+            const query = this.omit (params, this.extractParams (path));
+            if (method !== 'POST') {
+                if (Object.keys (query).length) {
+                    url += '?' + this.urlencode (query);
+                }
+            }
         } else {
             this.checkRequiredCredentials ();
             if (api === 'ecapi') {
